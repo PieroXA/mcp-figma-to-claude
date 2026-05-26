@@ -24,6 +24,13 @@ export function registerBatchTools(server: McpServer, bridge: WebSocketBridge): 
     a: z.number().min(0).max(1).optional(),
   });
 
+  const createMobileScreenResponseSchema = z.object({
+    frameId: z.string(),
+    statusBarId: z.string(),
+    navBarId: z.string(),
+    contentAreaId: z.string(),
+  });
+
   // ─────────────────────────────────────────────────────────────────────────
   // batch_execute — send N commands in 1 WebSocket round-trip
   // ─────────────────────────────────────────────────────────────────────────
@@ -103,7 +110,17 @@ export function registerBatchTools(server: McpServer, bridge: WebSocketBridge): 
         return { content: [{ type: "text", text: `Error: ${response.error}` }] };
       }
 
-      const { frameId, statusBarId, navBarId, contentAreaId } = response.data;
+      const parseResult = createMobileScreenResponseSchema.safeParse(response.data);
+      if (!parseResult.success) {
+        return {
+          content: [{
+            type: "text",
+            text: `Error: Unexpected response from plugin for create_mobile_screen: ${parseResult.error.message}`,
+          }],
+        };
+      }
+
+      const { frameId, statusBarId, navBarId, contentAreaId } = parseResult.data;
 
       return {
         content: [{
