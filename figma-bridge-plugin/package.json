@@ -1,0 +1,14 @@
+{
+  "name": "figma-bridge-plugin",
+  "version": "1.0.0",
+  "description": "Figma Desktop Bridge Plugin for MCP Server — Executes design commands via Plugin API",
+  "scripts": {
+    "build": "esbuild src/code.ts --bundle --outfile=dist/code.js --target=es2015",
+    "watch": "esbuild src/code.ts --bundle --outfile=dist/code.js --target=es2015 --watch"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.100.0",
+    "esbuild": "^0.28.0",
+    "typescript": "^5.7.0"
+  }
+}

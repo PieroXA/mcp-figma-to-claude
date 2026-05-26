@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #1e1e2e;
+      color: #cdd6f4;
+      padding: 16px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .header h1 {
+      font-size: 14px;
+      font-weight: 600;
+      color: #cba6f7;
+    }
+    .logo {
+      font-size: 18px;
+    }
+    .status-card {
+      background: #313244;
+      border-radius: 8px;
+      padding: 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      transition: background 0.3s;
+    }
+    .status-dot.disconnected { background: #f38ba8; }
+    .status-dot.connecting { background: #fab387; animation: pulse 1s infinite; }
+    .status-dot.connected { background: #a6e3a1; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    .status-text {
+      font-size: 12px;
+      color: #bac2de;
+    }
+    .status-text strong {
+      color: #cdd6f4;
+    }
+    .log {
+      flex: 1;
+      background: #181825;
+      border-radius: 8px;
+      padding: 8px;
+      overflow-y: auto;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 10px;
+      line-height: 1.5;
+    }
+    .log-entry {
+      color: #6c7086;
+    }
+    .log-entry.info { color: #89b4fa; }
+    .log-entry.success { color: #a6e3a1; }
+    .log-entry.error { color: #f38ba8; }
+    .log-entry .time { color: #585b70; margin-right: 6px; }
+    .stats {
+      display: flex;
+      gap: 8px;
+      font-size: 11px;
+    }
+    .stat {
+      background: #313244;
+      border-radius: 6px;
+      padding: 6px 10px;
+      flex: 1;
+      text-align: center;
+    }
+    .stat-value {
+      font-size: 16px;
+      font-weight: 700;
+      color: #cba6f7;
+    }
+    .stat-label {
+      font-size: 9px;
+      color: #6c7086;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <span class="logo">🔌</span>
+    <h1>Figma MCP Bridge</h1>
+  </div>
+
+  <div class="status-card">
+    <div id="statusDot" class="status-dot disconnected"></div>
+    <div class="status-text">
+      <strong id="statusText">Connecting...</strong><br>
+      <span id="statusDetail">Attempting to connect to MCP Server</span>
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-value" id="cmdCount">0</div>
+      <div class="stat-label">Commands</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" id="errCount">0</div>
+      <div class="stat-label">Errors</div>
+    </div>
+  </div>
+
+  <div class="log" id="log"></div>
+
+  <script>
+    // ── Configuration ──
+    const WS_PORT = 9001;
+    const WS_URL = `ws://localhost:${WS_PORT}`;
+    const RECONNECT_DELAY_MS = 3000;
+
+    // ── State ──
+    let ws = null;
+    let commandCount = 0;
+    let errorCount = 0;
+    let reconnectTimer = null;
+    let sandboxReady = false;
+
+    // ── UI Elements ──
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const statusDetail = document.getElementById('statusDetail');
+    const logEl = document.getElementById('log');
+    const cmdCountEl = document.getElementById('cmdCount');
+    const errCountEl = document.getElementById('errCount');
+
+    // ── Logging ──
+    function addLog(message, level = 'info') {
+      const entry = document.createElement('div');
+      entry.className = `log-entry ${level}`;
+      const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+      entry.innerHTML = `<span class="time">${time}</span>${message}`;
+      logEl.appendChild(entry);
+      logEl.scrollTop = logEl.scrollHeight;
+
+      // Keep last 100 entries
+      while (logEl.children.length > 100) {
+        logEl.removeChild(logEl.firstChild);
+      }
+    }
+
+    // ── Status updates ──
+    function setStatus(state, text, detail) {
+      statusDot.className = `status-dot ${state}`;
+      statusText.textContent = text;
+      statusDetail.textContent = detail;
+    }
+
+    // ── WebSocket connection ──
+    function connect() {
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
+
+      setStatus('connecting', 'Connecting...', `Trying ${WS_URL}`);
+      addLog(`Connecting to ${WS_URL}...`);
+
+      try {
+        ws = new WebSocket(WS_URL);
+      } catch (err) {
+        addLog(`Failed to create WebSocket: ${err.message}`, 'error');
+        scheduleReconnect();
+        return;
+      }
+
+      ws.onopen = () => {
+        setStatus('connected', 'Connected', 'MCP Server bridge active');
+        addLog('✅ Connected to MCP Server!', 'success');
+
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const command = JSON.parse(event.data);
+          commandCount++;
+          cmdCountEl.textContent = commandCount;
+
+          addLog(`← ${command.action} (${command.id})`);
+
+          // Forward to Figma sandbox via postMessage
+          parent.postMessage({
+            pluginMessage: {
+              type: 'bridge_command',
+              id: command.id,
+              action: command.action,
+              params: command.params || {},
+            }
+          }, '*');
+        } catch (err) {
+          addLog(`Parse error: ${err.message}`, 'error');
+          errorCount++;
+          errCountEl.textContent = errorCount;
+        }
+      };
+
+      ws.onclose = () => {
+        setStatus('disconnected', 'Disconnected', 'Connection lost');
+        addLog('Connection closed', 'error');
+        ws = null;
+        scheduleReconnect();
+      };
+
+      ws.onerror = (err) => {
+        addLog('WebSocket error', 'error');
+        errorCount++;
+        errCountEl.textContent = errorCount;
+      };
+    }
+
+    function scheduleReconnect() {
+      if (reconnectTimer) return;
+      addLog(`Reconnecting in ${RECONNECT_DELAY_MS / 1000}s...`);
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, RECONNECT_DELAY_MS);
+    }
+
+    // ── Handle messages from Figma sandbox ──
+    window.onmessage = (event) => {
+      const msg = event.data.pluginMessage;
+      if (!msg) return;
+
+      if (msg.type === 'sandbox_ready') {
+        sandboxReady = true;
+        addLog('Figma sandbox ready', 'success');
+        return;
+      }
+
+      if (msg.type === 'bridge_response') {
+        // Forward response back to MCP Server via WebSocket
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          const response = {
+            id: msg.id,
+            success: msg.success,
+            data: msg.data,
+            error: msg.error,
+          };
+
+          ws.send(JSON.stringify(response));
+
+          if (msg.success) {
+            addLog(`→ Response OK (${msg.id})`, 'success');
+          } else {
+            addLog(`→ Response ERROR: ${msg.error} (${msg.id})`, 'error');
+            errorCount++;
+            errCountEl.textContent = errorCount;
+          }
+        }
+      }
+    };
+
+    // ── Start connection ──
+    addLog('Figma MCP Bridge v1.0.0');
+    addLog('Initializing...');
+    connect();
+  </script>
+</body>
+</html>
